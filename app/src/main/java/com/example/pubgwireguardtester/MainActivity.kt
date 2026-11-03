@@ -21,6 +21,8 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val PICK_FILES = 101
     private val VPN_PERMISSION = 102
+    private val PICK_CAPTURE = 103
+    private val prefs by lazy { getSharedPreferences("pubg_tester_local", MODE_PRIVATE) }
 
     private lateinit var backend: GoBackend
     private lateinit var status: TextView
@@ -78,6 +80,14 @@ class MainActivity : Activity() {
 
         status = label("حالة الاتصال: غير متصل")
         root.addView(status)
+
+        addButton("استيراد ملف التقاط PCAP / PCAPNG") {
+            chooseCaptureFile()
+        }
+
+        addButton("حفظ عناوين IP الحالية") {
+            saveCurrentIps()
+        }
 
         addButton("استيراد ملفات WireGuard") {
             chooseFiles()
@@ -140,6 +150,48 @@ class MainActivity : Activity() {
         )
     }
 
+    private fun chooseCaptureFile() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/vnd.tcpdump.pcap", "application/octet-stream"))
+        }
+        startActivityForResult(intent, PICK_CAPTURE)
+    }
+
+    private fun importCapture(uri: android.net.Uri) {
+        output.text = "جارٍ تحليل ملف الالتقاط..."
+        executor.execute {
+            try {
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("تعذر قراءة الملف")
+                val found = CaptureParser.extract(bytes)
+                runOnUiThread {
+                    if (found.isEmpty()) {
+                        output.text = "لم يتم العثور على عناوين IP عامة في الملف. تأكد من تصدير PCAP أو PCAPNG يحتوي على حركة الشبكة أثناء اللعب."
+                    } else {
+                        val existing = ips.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                        existing.addAll(found)
+                        val merged = existing.joinToString("\n")
+                        ips.setText(merged)
+                        prefs.edit().putString("target_ips", merged).apply()
+                        output.text = "تم استخراج ${found.size} عنوان IP عام وإضافتها إلى قائمة الاختبار.\nيمكنك الآن تشغيل WireGuard ثم اختبار Ping."
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { output.text = "تعذر تحليل ملف الالتقاط: ${e.message}" }
+            }
+        }
+    }
+
+    private fun saveCurrentIps() {
+        val value = ips.text.toString().lines().map { it.trim() }
+            .filter { it.isNotEmpty() }.distinct().joinToString("\n")
+        ips.setText(value)
+        prefs.edit().putString("target_ips", value).apply()
+        Toast.makeText(this, "تم حفظ عناوين IP على الهاتف", Toast.LENGTH_SHORT).show()
+    }
+
     private fun chooseFiles() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -157,6 +209,11 @@ class MainActivity : Activity() {
         data: Intent?
     ) {
         super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == PICK_CAPTURE && resultCode == RESULT_OK && data?.data != null) {
+            importCapture(data.data!!)
+            return
+        }
 
         if (requestCode == VPN_PERMISSION) {
             if (resultCode == RESULT_OK) {
@@ -265,6 +322,7 @@ class MainActivity : Activity() {
     }
 
     private fun testPing() {
+        prefs.edit().putString("target_ips", ips.text.toString()).apply()
         val hosts = ips.text.toString()
             .lines()
             .map { it.trim() }
