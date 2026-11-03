@@ -40,7 +40,7 @@ object CaptureParser {
             val captured = u32(data, offset + 8, order)
             if (captured < 0 || captured > data.size - offset - 16) break
             parsePacket(data, offset + 16, captured, linkType, found)
-            offset += 16 + captured
+            offset += 16 + captured.toInt()
         }
         return found
     }
@@ -82,7 +82,7 @@ object CaptureParser {
                     parsePacket(data, offset + 12, captured, interfaces[0], found)
                 }
             }
-            offset += blockLength
+            offset += blockLength.toInt()
         }
         return found
     }
